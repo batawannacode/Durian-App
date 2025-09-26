@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Durian Plant Monitor</title>
+    <meta name="description" content="Monitor your durian plants with real-time sensor data">
     <style>
         * {
             margin: 0;
@@ -329,6 +330,120 @@
             cursor: pointer;
             font-size: 14px;
         }
+
+        /* Camera styles */
+        .camera-section {
+            margin-bottom: 20px;
+        }
+
+        .camera-container {
+            position: relative;
+            background: #f8fafc;
+            border-radius: 16px;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+
+        #camera-feed {
+            width: 100%;
+            height: auto;
+            max-height: 300px;
+            object-fit: cover;
+            display: block;
+            transition: opacity 0.3s;
+        }
+
+        .camera-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 1;
+            transition: opacity 0.3s;
+        }
+
+        .camera-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .camera-status {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .camera-controls {
+            display: flex;
+            gap: 8px;
+            padding: 12px;
+            background: white;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .camera-btn {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            color: white;
+            border: none;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            min-width: 80px;
+        }
+
+        .camera-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+        }
+
+        .camera-btn:active {
+            transform: translateY(0);
+        }
+
+        .camera-btn.live-mode {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+        }
+
+        .camera-error {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6b7280;
+        }
+
+        .camera-error-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        /* Mobile camera optimizations */
+        @media (max-width: 480px) {
+            #camera-feed {
+                max-height: 250px;
+            }
+
+            .camera-controls {
+                padding: 8px;
+                gap: 6px;
+            }
+
+            .camera-btn {
+                padding: 6px 12px;
+                font-size: 10px;
+                min-width: 70px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -353,6 +468,31 @@
 
         <!-- Error Message -->
         <div id="error-message" class="error-message" style="display: none;"></div>
+
+        <!-- Camera Card -->
+        <div class="card">
+            <div class="camera-section">
+                <h2 class="controls-title">📷 Plant Camera</h2>
+                <div class="camera-container">
+                    <img id="camera-feed" 
+                         src="http://192.168.43.35/capture" 
+                         alt="ESP32-CAM Feed"
+                         onerror="handleCameraError()"
+                         onload="handleCameraLoad()">
+                    <div class="camera-overlay" id="camera-overlay">
+                        <div class="camera-status" id="camera-status">
+                            <div class="status-dot" id="camera-dot"></div>
+                            <span id="camera-text">Connecting to camera...</span>
+                        </div>
+                    </div>
+                    <div class="camera-controls">
+                        <button class="camera-btn" onclick="refreshCamera()">🔄 Refresh</button>
+                        <button class="camera-btn" onclick="toggleCameraMode()">📹 Live</button>
+                        <button class="camera-btn" onclick="downloadSnapshot()">💾 Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- Sensor Data Card -->
         <div class="card">
@@ -431,6 +571,7 @@
     <script>
         // Firebase configuration
         const FIREBASE_URL = 'https://durian-app-2cdce-default-rtdb.firebaseio.com/';
+        const ESP32CAM_URL = 'http://192.168.43.35';
         
         // App state
         let appData = {
@@ -445,12 +586,16 @@
         };
 
         let isConnected = false;
+        let isCameraConnected = false;
+        let isLiveMode = false;
         let autoRefreshInterval;
+        let cameraRefreshInterval;
 
         // Initialize app
         document.addEventListener('DOMContentLoaded', function() {
             loadData();
             startAutoRefresh();
+            initializeCamera();
             setupPWA();
         });
 
@@ -728,7 +873,138 @@
             if (autoRefreshInterval) {
                 clearInterval(autoRefreshInterval);
             }
+            if (cameraRefreshInterval) {
+                clearInterval(cameraRefreshInterval);
+            }
         });
+
+        // Camera Functions
+        function initializeCamera() {
+            const cameraFeed = document.getElementById('camera-feed');
+            refreshCamera();
+        }
+
+        function handleCameraLoad() {
+            isCameraConnected = true;
+            const overlay = document.getElementById('camera-overlay');
+            const dot = document.getElementById('camera-dot');
+            const text = document.getElementById('camera-text');
+            
+            overlay.classList.add('hidden');
+            dot.classList.add('connected');
+            text.textContent = 'Camera connected';
+            
+            setTimeout(() => {
+                if (overlay.classList.contains('hidden')) {
+                    overlay.style.display = 'none';
+                }
+            }, 1000);
+        }
+
+        function handleCameraError() {
+            isCameraConnected = false;
+            const overlay = document.getElementById('camera-overlay');
+            const dot = document.getElementById('camera-dot');
+            const text = document.getElementById('camera-text');
+            const cameraFeed = document.getElementById('camera-feed');
+            
+            overlay.style.display = 'flex';
+            overlay.classList.remove('hidden');
+            dot.classList.remove('connected');
+            text.textContent = 'Camera offline';
+            
+            // Show error message in camera area
+            overlay.innerHTML = `
+                <div class="camera-error">
+                    <div class="camera-error-icon">📷</div>
+                    <div>Camera not available</div>
+                    <div style="font-size: 12px; margin-top: 8px; opacity: 0.8;">
+                        Check ESP32-CAM connection
+                    </div>
+                </div>
+            `;
+        }
+
+        function refreshCamera() {
+            const cameraFeed = document.getElementById('camera-feed');
+            const timestamp = new Date().getTime();
+            cameraFeed.src = `${ESP32CAM_URL}/capture?t=${timestamp}`;
+            
+            // Reset overlay for new attempt
+            const overlay = document.getElementById('camera-overlay');
+            const dot = document.getElementById('camera-dot');
+            const text = document.getElementById('camera-text');
+            
+            overlay.style.display = 'flex';
+            overlay.classList.remove('hidden');
+            overlay.innerHTML = `
+                <div class="camera-status">
+                    <div class="status-dot" id="camera-dot"></div>
+                    <span id="camera-text">Loading camera...</span>
+                </div>
+            `;
+        }
+
+        function toggleCameraMode() {
+            const btn = event.target;
+            
+            if (isLiveMode) {
+                // Stop live mode
+                if (cameraRefreshInterval) {
+                    clearInterval(cameraRefreshInterval);
+                }
+                isLiveMode = false;
+                btn.textContent = '📹 Live';
+                btn.classList.remove('live-mode');
+                showSuccess('Live mode stopped');
+            } else {
+                // Start live mode
+                if (!isCameraConnected) {
+                    showError('Camera not connected');
+                    return;
+                }
+                
+                isLiveMode = true;
+                btn.textContent = '⏹ Stop';
+                btn.classList.add('live-mode');
+                
+                // Refresh camera every 2 seconds in live mode
+                cameraRefreshInterval = setInterval(() => {
+                    refreshCamera();
+                }, 2000);
+                
+                showSuccess('Live mode started');
+            }
+        }
+
+        function downloadSnapshot() {
+            if (!isCameraConnected) {
+                showError('Camera not connected');
+                return;
+            }
+            
+            const cameraFeed = document.getElementById('camera-feed');
+            const link = document.createElement('a');
+            const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+            
+            // Create canvas to convert image
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = cameraFeed.naturalWidth;
+            canvas.height = cameraFeed.naturalHeight;
+            ctx.drawImage(cameraFeed, 0, 0);
+            
+            canvas.toBlob((blob) => {
+                const url = URL.createObjectURL(blob);
+                link.href = url;
+                link.download = `durian-plant-${timestamp}.jpg`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                showSuccess('Snapshot saved');
+            }, 'image/jpeg', 0.9);
+        }
     </script>
 </body>
 </html>
